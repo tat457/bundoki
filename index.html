@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>デジタル分度器 & 角度測定ツール</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    /* キャンバスとオーバーレイ設定 */
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+    /* キャンバス上のみドラッグ操作を有効化 */
+    #main-canvas {
+      touch-action: none;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 3px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #1e293b;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col overflow-hidden select-none">
+
+  <!-- ヘッダー -->
+  <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between z-20 shrink-0">
+    <div class="flex items-center space-x-3">
+      <div class="bg-indigo-600 text-white p-2 rounded-lg flex items-center justify-center">
+        <i class="fa-solid font-bold text-lg fa-compass"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-base sm:text-lg leading-tight">デジタル分度器</h1>
+        <p class="text-xs text-slate-400 hidden sm:block">角度測定 & グラフィック解析ツール</p>
+      </div>
+    </div>
+
+    <!-- メイン測定モード切り替え -->
+    <div class="flex bg-slate-900 p-1 rounded-xl border border-slate-700 text-xs sm:text-sm">
+      <button id="mode-interactive-btn" onclick="setMode('interactive')" class="px-3 py-1.5 rounded-lg font-medium transition-colors bg-indigo-600 text-white flex items-center space-x-1.5">
+        <i class="fa-solid fa-draw-polygon"></i>
+        <span class="hidden md:inline">インタラクティブ</span>
+      </button>
+      <button id="mode-camera-btn" onclick="setMode('camera')" class="px-3 py-1.5 rounded-lg font-medium transition-colors text-slate-400 hover:text-white flex items-center space-x-1.5">
+        <i class="fa-solid fa-camera"></i>
+        <span class="hidden md:inline">カメラ</span>
+      </button>
+      <button id="mode-image-btn" onclick="setMode('image')" class="px-3 py-1.5 rounded-lg font-medium transition-colors text-slate-400 hover:text-white flex items-center space-x-1.5">
+        <i class="fa-solid fa-image"></i>
+        <span class="hidden md:inline">画像</span>
+      </button>
+      <button id="mode-gyro-btn" onclick="setMode('gyro')" class="px-3 py-1.5 rounded-lg font-medium transition-colors text-slate-400 hover:text-white flex items-center space-x-1.5">
+        <i class="fa-solid fa-mobile-screen-button"></i>
+        <span class="hidden md:inline">傾き(ジャイロ)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- メインワークスペース -->
+  <div class="flex-1 flex flex-col md:flex-row relative overflow-hidden">
+
+    <!-- 描画・ビューポートエリア -->
+    <div class="flex-1 relative bg-slate-950 flex items-center justify-center overflow-hidden" id="canvas-container">
+      
+      <!-- バックグラウンド・カメラ映像 -->
+      <video id="webcam" autoplay playsinline class="absolute inset-0 w-full h-full object-cover hidden"></video>
+
+      <!-- アップロード画像を表示する要素 -->
+      <img id="uploaded-image" class="absolute max-w-full max-h-full object-contain hidden" alt="Uploaded View">
+
+      <!-- メイン描画用Canvas -->
+      <canvas id="main-canvas" class="absolute inset-0 z-10 cursor-crosshair"></canvas>
+
+      <!-- 傾きセンサー（水準器）専用UI -->
+      <div id="gyro-ui" class="hidden absolute inset-0 z-10 flex flex-col items-center justify-center p-6 bg-slate-900/90 text-center select-none overflow-y-auto">
+        <div id="gyro-touch-area" class="relative w-64 h-64 sm:w-80 sm:h-80 border-4 border-slate-700 rounded-full flex items-center justify-center shadow-2xl bg-slate-950/50 cursor-pointer touch-none">
+          <!-- 水平標的リング -->
+          <div id="gyro-target-ring" class="absolute w-32 h-32 border-2 border-indigo-500/50 rounded-full transition-all duration-300"></div>
+          <div class="absolute w-12 h-12 border border-slate-600 rounded-full"></div>
+          <!-- 十字線 -->
+          <div class="absolute w-full h-0.5 bg-slate-700/60"></div>
+          <div class="absolute h-full w-0.5 bg-slate-700/60"></div>
+          <!-- バブル（気泡） -->
+          <div id="gyro-bubble" class="absolute w-10 h-10 bg-indigo-500/80 border-2 border-indigo-300 rounded-full transition-all duration-75 shadow-lg shadow-indigo-500/50" style="transform: translate(0px, 0px);"></div>
+        </div>
+        
+        <div class="mt-6 space-y-3 max-w-sm px-4">
+          <div class="text-4xl sm:text-5xl font-mono font-bold text-indigo-400" id="gyro-angle-display">0.0°</div>
+          <p class="text-xs sm:text-sm text-slate-400 leading-relaxed" id="gyro-status-text">デバイスを傾けると傾斜角を測定できます</p>
+          
+          <div class="flex flex-wrap items-center justify-center gap-2 pt-1">
+            <button id="gyro-request-btn" onclick="requestGyroPermission()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium text-xs transition-all shadow-lg hidden">
+              <i class="fa-solid fa-key mr-1.5"></i>センサーの使用を許可
+            </button>
+            <button id="gyro-calibrate-btn" onclick="calibrateGyro()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg font-medium text-xs transition-all">
+              <i class="fa-solid fa-bullseye mr-1.5"></i>ゼロ点セット (0°)
+            </button>
+            <button id="gyro-sim-btn" onclick="toggleGyroSim()" class="px-4 py-2 bg-indigo-600/30 border border-indigo-500/40 hover:bg-indigo-600/40 text-indigo-300 rounded-lg font-medium text-xs transition-all">
+              <i class="fa-solid fa-hand-pointer mr-1.5"></i><span id="gyro-sim-btn-text">手動で操作・テスト</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 画像未設定時のガイド（画像モード時のみ） -->
+      <div id="image-upload-prompt" class="hidden absolute z-10 flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-700 rounded-2xl bg-slate-900/80 backdrop-blur-sm max-w-sm text-center">
+        <i class="fa-solid fa-cloud-arrow-up text-4xl text-indigo-400 mb-3"></i>
+        <h3 class="font-bold text-lg mb-1">画像を読み込む</h3>
+        <p class="text-xs text-slate-400 mb-4">図面や写真上の角度を測ることができます</p>
+        <label class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg cursor-pointer transition-colors shadow-lg">
+          画像を選択
+          <input type="file" id="image-input" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
+        </label>
+      </div>
+
+      <!-- 浮動リアルタイム角度表示バッジ -->
+      <div id="angle-badge" class="absolute top-4 left-4 z-20 bg-slate-900/90 border border-slate-700/80 backdrop-blur-md rounded-xl p-3 shadow-xl flex items-center space-x-4">
+        <div>
+          <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">測定角度</div>
+          <div class="text-2xl sm:text-3xl font-mono font-extrabold text-indigo-400" id="main-angle-text">0.0°</div>
+        </div>
+        <div class="h-8 w-px bg-slate-700"></div>
+        <div>
+          <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">補角 (180°-θ)</div>
+          <div class="text-sm font-mono text-slate-300" id="supp-angle-text">180.0°</div>
+          <div class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-0.5">外角 (360°-θ)</div>
+          <div class="text-sm font-mono text-slate-300" id="ex-angle-text">360.0°</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- サイドコントロールパネル（タッチスクロールを有効化） -->
+    <div class="w-full md:w-80 max-h-[45vh] md:max-h-none bg-slate-800 border-t md:border-t-0 md:border-l border-slate-700 p-4 flex flex-col space-y-5 overflow-y-auto touch-pan-y shrink-0 z-20 custom-scrollbar">
+      
+      <!-- 角度単位・スナップ設定 -->
+      <div class="bg-slate-900/70 p-3.5 rounded-xl border border-slate-700/60 space-y-3">
+        <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+          <span>基本設定</span>
+          <i class="fa-solid fa-sliders"></i>
+        </h2>
+        
+        <div class="grid grid-cols-2 gap-2">
+          <!-- 単位切り替え -->
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">単位</label>
+            <select id="unit-select" onchange="updateSettings()" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="deg">度 (Degree °)</option>
+              <option value="rad">ラジアン (Rad)</option>
+            </select>
+          </div>
+
+          <!-- スナップ機能 -->
+          <div>
+            <label class="block text-[11px] text-slate-400 mb-1">スナップ (15°刻み)</label>
+            <button id="snap-toggle-btn" onclick="toggleSnap()" class="w-full px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 bg-slate-800 text-slate-400 flex items-center justify-center space-x-1.5 transition-colors">
+              <i class="fa-solid fa-magnet"></i>
+              <span id="snap-status-text">OFF</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分度器グラフィックオーバーレイ設定 -->
+      <div class="bg-slate-900/70 p-3.5 rounded-xl border border-slate-700/60 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">分度器ガイド</h2>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="protractor-toggle" onchange="updateSettings()" class="sr-only peer" checked>
+            <div class="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
+          </label>
+        </div>
+
+        <div id="protractor-controls" class="space-y-3 pt-1">
+          <!-- タイプ選択 -->
+          <div class="flex bg-slate-800 p-1 rounded-lg border border-slate-700 text-xs">
+            <button id="prot-type-180" onclick="setProtractorType('180')" class="flex-1 py-1 rounded font-medium bg-indigo-600 text-white text-center">180° (半円)</button>
+            <button id="prot-type-360" onclick="setProtractorType('360')" class="flex-1 py-1 rounded font-medium text-slate-400 hover:text-white text-center">360° (全円)</button>
+          </div>
+
+          <!-- 透明度スライダー -->
+          <div>
+            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+              <span>透明度</span>
+              <span id="opacity-val">50%</span>
+            </div>
+            <input type="range" id="opacity-range" min="0.1" max="1.0" step="0.05" value="0.5" oninput="updateSettings()" class="w-full accent-indigo-500 bg-slate-800 rounded-lg h-1.5 cursor-pointer">
+          </div>
+
+          <!-- サイズ調整 -->
+          <div>
+            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+              <span>サイズ</span>
+              <span id="size-val">220px</span>
+            </div>
+            <input type="range" id="size-range" min="100" max="400" step="10" value="220" oninput="updateSettings()" class="w-full accent-indigo-500 bg-slate-800 rounded-lg h-1.5 cursor-pointer">
+          </div>
+
+          <!-- 分度器の回転調整 -->
+          <div>
+            <div class="flex justify-between text-[11px] text-slate-400 mb-1">
+              <span>回転角</span>
+              <span id="rotation-val">0°</span>
+            </div>
+            <input type="range" id="rotation-range" min="0" max="360" step="1" value="0" oninput="updateSettings()" class="w-full accent-indigo-500 bg-slate-800 rounded-lg h-1.5 cursor-pointer">
+          </div>
+        </div>
+      </div>
+
+      <!-- 操作ガイド & アクションボタン -->
+      <div class="space-y-2">
+        <button onclick="resetPoints()" class="w-full py-2 bg-slate-700 hover:bg-slate-600 active:bg-slate-800 text-slate-200 text-xs font-semibold rounded-xl transition-colors flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-rotate-left"></i>
+          <span>計測点をリセット</span>
+        </button>
+        <button onclick="takeScreenshot()" class="w-full py-2 bg-indigo-600/20 border border-indigo-500/40 hover:bg-indigo-600/30 text-indigo-300 text-xs font-semibold rounded-xl transition-colors flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-camera-retro"></i>
+          <span>画面の保存 (スクリーンショット)</span>
+        </button>
+      </div>
+
+      <!-- 簡易説明 -->
+      <div class="bg-slate-900/40 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+        <p class="font-semibold text-slate-300 flex items-center space-x-1">
+          <i class="fa-solid fa-circle-info text-indigo-400"></i>
+          <span>使い方</span>
+        </p>
+        <ul class="list-disc list-inside space-y-1 text-slate-400">
+          <li>中心点<span class="text-indigo-400 font-bold">V</span>と端点<span class="text-emerald-400 font-bold">A</span>・<span class="text-amber-400 font-bold">B</span>をドラッグして角度を合わせます。</li>
+          <li>カメラ・画像モードで実際の写真の上に角度を重ねられます。</li>
+        </ul>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- トースト通知 UI -->
+  <div id="toast-notification" class="fixed bottom-5 right-5 z-50 opacity-0 pointer-events-none transform translate-y-2 transition-all duration-300 flex items-center space-x-3 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl">
+    <i id="toast-icon" class="fa-solid fa-circle-info text-indigo-400"></i>
+    <span id="toast-text" class="text-xs font-medium"></span>
+  </div>
+
+  <!-- JavaScript ロジック -->
+  <script>
+    // --- アプリケーションの状態管理 ---
+    const state = {
+      mode: 'interactive', // 'interactive', 'camera', 'image', 'gyro'
+      unit: 'deg', // 'deg', 'rad'
+      snap: false,
+      
+      // 計測の3点 (V: Vertex/頂点, A: 開始点, B: 終了点)
+      points: {
+        v: { x: 0, y: 0 },
+        a: { x: 0, y: 0 },
+        b: { x: 0, y: 0 }
+      },
+      
+      // ドラッグ操作の状態
+      dragTarget: null, // 'v', 'a', 'b', or null
+
+      // 分度器設定
+      protractor: {
+        enabled: true,
+        type: '180', // '180' or '360'
+        radius: 220,
+        opacity: 0.6,
+        rotation: 0 // 度
+      },
+
+      // ジャイロ角度
+      gyroAngle: 0,
+      
+      // ストリームとメディア
+      mediaStream: null
+    };
+
+    // DOM要素の参照
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    const video = document.getElementById('webcam');
+    const uploadedImage = document.getElementById('uploaded-image');
+    const imagePrompt = document.getElementById('image-upload-prompt');
+    const gyroUI = document.getElementById('gyro-ui');
+
+    // --- 初期化 ---
+    window.addEventListener('load', () => {
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+      
+      // イベントリスナー登録 (マウス & タッチ)
+      canvas.addEventListener('mousedown', handlePointerDown);
+      canvas.addEventListener('mousemove', handlePointerMove);
+      window.addEventListener('mouseup', handlePointerUp);
+
+      canvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+      canvas.addEventListener('touchmove', handlePointerMove, { passive: false });
+      window.addEventListener('touchend', handlePointerUp);
+
+      // 初期コントロールUI状態を同期
+      updateSettings();
+
+      // 初期の点をキャンバス中心付近に配置
+      resetPoints();
+
+      // ループ描画開始
+      requestAnimationFrame(renderLoop);
+    });
+
+    // キャンバスのリサイズ対応（高DPIサポート）
+    function resizeCanvas() {
+      const rect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+    }
+
+    // デフォルトの点配置
+    function resetPoints() {
+      const rect = container.getBoundingClientRect();
+      const cx = rect.width / 2;
+      const cy = rect.height / 2 + 30;
+      
+      state.points.v = { x: cx, y: cy };
+      state.points.a = { x: cx + 160, y: cy };
+      state.points.b = { x: cx + 110, y: cy - 130 };
+    }
+
+    // --- モード切替 ---
+    function setMode(newMode) {
+      state.mode = newMode;
+
+      // ボタンのスタイル更新
+      ['interactive', 'camera', 'image', 'gyro'].forEach(m => {
+        const btn = document.getElementById(`mode-${m}-btn`);
+        if (m === newMode) {
+          btn.className = 'px-3 py-1.5 rounded-lg font-medium transition-colors bg-indigo-600 text-white flex items-center space-x-1.5';
+        } else {
+          btn.className = 'px-3 py-1.5 rounded-lg font-medium transition-colors text-slate-400 hover:text-white flex items-center space-x-1.5';
+        }
+      });
+
+      // UI表示切り替え
+      video.classList.add('hidden');
+      uploadedImage.classList.add('hidden');
+      imagePrompt.classList.add('hidden');
+      gyroUI.classList.add('hidden');
+      canvas.classList.remove('hidden');
+
+      // カメラ停止処理
+      if (state.mediaStream) {
+        state.mediaStream.getTracks().forEach(track => track.stop());
+        state.mediaStream = null;
+      }
+
+      if (newMode === 'camera') {
+        startCamera();
+      } else if (newMode === 'image') {
+        if (!uploadedImage.src) {
+          imagePrompt.classList.remove('hidden');
+        } else {
+          uploadedImage.classList.remove('hidden');
+        }
+      } else if (newMode === 'gyro') {
+        canvas.classList.add('hidden');
+        gyroUI.classList.remove('hidden');
+        initGyro();
+      }
+    }
+
+    // --- カメラ機能 ---
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        state.mediaStream = stream;
+        video.srcObject = stream;
+        video.classList.remove('hidden');
+      } catch (err) {
+        showToast('カメラへのアクセスに失敗しました。権限を確認してください。', true);
+        setMode('interactive');
+      }
+    }
+
+    // --- 画像アップロード ---
+    function handleImageUpload(e) {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          uploadedImage.src = event.target.result;
+          uploadedImage.classList.remove('hidden');
+          imagePrompt.classList.add('hidden');
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    // --- ジャイロセンサー/傾き測定 ---
+    const gyroState = {
+      hasSensorData: false,
+      simulated: false,
+      rawBeta: 0,
+      rawGamma: 0,
+      zeroBeta: 0,
+      zeroGamma: 0
+    };
+
+    function initGyro() {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        document.getElementById('gyro-request-btn').classList.remove('hidden');
+        document.getElementById('gyro-status-text').innerText = '「センサーの使用を許可」ボタンをタップしてください';
+      } else if (window.DeviceOrientationEvent) {
+        document.getElementById('gyro-request-btn').classList.add('hidden');
+        attachOrientationListeners();
+      } else {
+        document.getElementById('gyro-status-text').innerText = 'お使いの端末・ブラウザは傾きセンサーに対応していません';
+        toggleGyroSim(true);
+      }
+    }
+
+    function attachOrientationListeners() {
+      window.removeEventListener('deviceorientation', handleOrientation);
+      window.removeEventListener('deviceorientationabsolute', handleOrientation);
+
+      window.addEventListener('deviceorientation', handleOrientation, true);
+      window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+
+      setTimeout(() => {
+        if (!gyroState.hasSensorData && state.mode === 'gyro') {
+          document.getElementById('gyro-status-text').innerText = '⚠️ センサーデータが取得できません（PC/非対応環境またはセキュリティ制限）。手動シミュレーションをご利用いただけます。';
+        }
+      }, 1500);
+    }
+
+    async function requestGyroPermission() {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try {
+          const response = await DeviceOrientationEvent.requestPermission();
+          if (response === 'granted') {
+            document.getElementById('gyro-request-btn').classList.add('hidden');
+            attachOrientationListeners();
+            showToast('センサー使用が許可されました');
+          } else {
+            showToast('センサーアクセスが拒否されました', true);
+          }
+        } catch (err) {
+          showToast('センサー許可の取得に失敗しました', true);
+        }
+      }
+    }
+
+    function handleOrientation(e) {
+      if (gyroState.simulated) return;
+
+      if (e.gamma === null || e.beta === null || e.gamma === undefined || e.beta === undefined) {
+        return;
+      }
+
+      gyroState.hasSensorData = true;
+      gyroState.rawGamma = e.gamma || 0;
+      gyroState.rawBeta = e.beta || 0;
+
+      document.getElementById('gyro-status-text').innerText = 'リアルタイム傾き測定中';
+
+      const gamma = gyroState.rawGamma - gyroState.zeroGamma;
+      const beta = gyroState.rawBeta - gyroState.zeroBeta;
+
+      updateGyroUI(gamma, beta);
+    }
+
+    function updateGyroUI(gamma, beta) {
+      const currentAngle = Math.abs(gamma);
+
+      const maxRadius = 100;
+      const x = Math.max(-maxRadius, Math.min(maxRadius, gamma * 2.5));
+      const y = Math.max(-maxRadius, Math.min(maxRadius, beta * 2.5));
+
+      const bubble = document.getElementById('gyro-bubble');
+      const angleDisplay = document.getElementById('gyro-angle-display');
+      const targetRing = document.getElementById('gyro-target-ring');
+
+      if (bubble) bubble.style.transform = `translate(${x}px, ${y}px)`;
+      if (angleDisplay) angleDisplay.innerText = `${currentAngle.toFixed(1)}°`;
+
+      if (currentAngle < 1.0) {
+        if (bubble) bubble.className = "absolute w-10 h-10 bg-emerald-500 border-2 border-emerald-300 rounded-full transition-all duration-75 shadow-lg shadow-emerald-500/80 scale-110";
+        if (angleDisplay) angleDisplay.className = "text-4xl sm:text-5xl font-mono font-bold text-emerald-400";
+        if (targetRing) targetRing.className = "absolute w-32 h-32 border-2 border-emerald-500/80 rounded-full animate-pulse";
+      } else {
+        if (bubble) bubble.className = "absolute w-10 h-10 bg-indigo-500/80 border-2 border-indigo-300 rounded-full transition-all duration-75 shadow-lg shadow-indigo-500/50";
+        if (angleDisplay) angleDisplay.className = "text-4xl sm:text-5xl font-mono font-bold text-indigo-400";
+        if (targetRing) targetRing.className = "absolute w-32 h-32 border-2 border-indigo-500/50 rounded-full";
+      }
+    }
+
+    function calibrateGyro() {
+      gyroState.zeroGamma = gyroState.rawGamma;
+      gyroState.zeroBeta = gyroState.rawBeta;
+      showToast('現在の傾きを0°として基準設定しました');
+    }
+
+    function toggleGyroSim(forceSim = false) {
+      gyroState.simulated = forceSim ? true : !gyroState.simulated;
+      const simBtnText = document.getElementById('gyro-sim-btn-text');
+
+      if (gyroState.simulated) {
+        document.getElementById('gyro-status-text').innerText = '手動操作モード: 円内でドラッグすると傾きをテストできます';
+        if (simBtnText) simBtnText.innerText = 'センサーモードに戻る';
+        setupGyroTouchSim();
+      } else {
+        document.getElementById('gyro-status-text').innerText = 'センサーの応答を確認中...';
+        if (simBtnText) simBtnText.innerText = '手動で操作・テスト';
+        attachOrientationListeners();
+      }
+    }
+
+    function setupGyroTouchSim() {
+      const area = document.getElementById('gyro-touch-area');
+      if (!area || area.dataset.simBound) return;
+      area.dataset.simBound = "true";
+
+      const handleSimMove = (clientX, clientY) => {
+        if (!gyroState.simulated) return;
+        const rect = area.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+
+        const dx = (clientX - cx) / (rect.width / 2);
+        const dy = (clientY - cy) / (rect.height / 2);
+
+        const simGamma = Math.max(-1, Math.min(1, dx)) * 45;
+        const simBeta = Math.max(-1, Math.min(1, dy)) * 45;
+
+        gyroState.rawGamma = simGamma;
+        gyroState.rawBeta = simBeta;
+
+        updateGyroUI(simGamma - gyroState.zeroGamma, simBeta - gyroState.zeroBeta);
+      };
+
+      area.addEventListener('mousemove', (e) => {
+        if (e.buttons === 1) handleSimMove(e.clientX, e.clientY);
+      });
+      area.addEventListener('touchmove', (e) => {
+        if (e.touches.length > 0) handleSimMove(e.touches[0].clientX, e.touches[0].clientY);
+      }, { passive: true });
+    }
+
+    // --- トースト通知表示 ---
+    function showToast(message, isError = false) {
+      const toast = document.getElementById('toast-notification');
+      const toastText = document.getElementById('toast-text');
+      const toastIcon = document.getElementById('toast-icon');
+      if (!toast) return;
+
+      toastText.innerText = message;
+      if (isError) {
+        toast.className = 'fixed bottom-5 right-5 z-50 bg-red-900/90 border border-red-700 text-red-100 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 transition-all duration-300 opacity-100 transform translate-y-0';
+        toastIcon.className = 'fa-solid fa-triangle-exclamation text-red-400';
+      } else {
+        toast.className = 'fixed bottom-5 right-5 z-50 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 transition-all duration-300 opacity-100 transform translate-y-0';
+        toastIcon.className = 'fa-solid fa-circle-info text-indigo-400';
+      }
+
+      setTimeout(() => {
+        toast.className = 'fixed bottom-5 right-5 z-50 opacity-0 pointer-events-none transform translate-y-2 transition-all duration-300 flex items-center space-x-3 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl';
+      }, 3500);
+    }
+
+    // --- 設定アップデート ---
+    function updateSettings() {
+      state.unit = document.getElementById('unit-select').value;
+      state.protractor.enabled = document.getElementById('protractor-toggle').checked;
+      state.protractor.opacity = parseFloat(document.getElementById('opacity-range').value);
+      state.protractor.radius = parseInt(document.getElementById('size-range').value);
+      state.protractor.rotation = parseInt(document.getElementById('rotation-range').value);
+
+      document.getElementById('opacity-val').innerText = `${Math.round(state.protractor.opacity * 100)}%`;
+      document.getElementById('size-val').innerText = `${state.protractor.radius}px`;
+      document.getElementById('rotation-val').innerText = `${state.protractor.rotation}°`;
+
+      const controls = document.getElementById('protractor-controls');
+      if (state.protractor.enabled) {
+        controls.classList.remove('opacity-40', 'pointer-events-none');
+      } else {
+        controls.classList.add('opacity-40', 'pointer-events-none');
+      }
+    }
+
+    function setProtractorType(type) {
+      state.protractor.type = type;
+      document.getElementById('prot-type-180').className = type === '180' 
+        ? 'flex-1 py-1 rounded font-medium bg-indigo-600 text-white text-center' 
+        : 'flex-1 py-1 rounded font-medium text-slate-400 hover:text-white text-center';
+      document.getElementById('prot-type-360').className = type === '360' 
+        ? 'flex-1 py-1 rounded font-medium bg-indigo-600 text-white text-center' 
+        : 'flex-1 py-1 rounded font-medium text-slate-400 hover:text-white text-center';
+    }
+
+    function toggleSnap() {
+      state.snap = !state.snap;
+      const btn = document.getElementById('snap-toggle-btn');
+      const text = document.getElementById('snap-status-text');
+      if (state.snap) {
+        btn.className = 'w-full px-2.5 py-1.5 rounded-lg text-xs font-medium border border-indigo-500 bg-indigo-600/20 text-indigo-300 flex items-center justify-center space-x-1.5 transition-colors';
+        text.innerText = 'ON (15°)';
+      } else {
+        btn.className = 'w-full px-2.5 py-1.5 rounded-lg text-xs font-medium border border-slate-700 bg-slate-800 text-slate-400 flex items-center justify-center space-x-1.5 transition-colors';
+        text.innerText = 'OFF';
+      }
+    }
+
+    // --- ポインター/タッチ判定 ---
+    function getPointerPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return {
+        x: clientX - rect.left,
+        y: clientY - rect.top
+      };
+    }
+
+    function handlePointerDown(e) {
+      const pos = getPointerPos(e);
+      const hitRadius = 28; // タッチ操作しやすいよう判定範囲を拡張
+
+      // 頂点・コントロールポイントとの当たり判定
+      if (hypot(pos.x - state.points.v.x, pos.y - state.points.v.y) < hitRadius) {
+        state.dragTarget = 'v';
+      } else if (hypot(pos.x - state.points.a.x, pos.y - state.points.a.y) < hitRadius) {
+        state.dragTarget = 'a';
+      } else if (hypot(pos.x - state.points.b.x, pos.y - state.points.b.y) < hitRadius) {
+        state.dragTarget = 'b';
+      } else {
+        state.dragTarget = null;
+      }
+
+      if (state.dragTarget) {
+        e.preventDefault();
+      }
+    }
+
+    function handlePointerMove(e) {
+      if (!state.dragTarget) return;
+      e.preventDefault();
+
+      const pos = getPointerPos(e);
+      const { v } = state.points;
+
+      if (state.dragTarget === 'v') {
+        // 頂点を動かす場合は全体を並行移動
+        const dx = pos.x - v.x;
+        const dy = pos.y - v.y;
+        v.x = pos.x;
+        v.y = pos.y;
+        state.points.a.x += dx;
+        state.points.a.y += dy;
+        state.points.b.x += dx;
+        state.points.b.y += dy;
+      } else {
+        // AまたはBの点をドラッグ
+        let targetPoint = state.points[state.dragTarget];
+        let angle = Math.atan2(pos.y - v.y, pos.x - v.x);
+
+        // 15度刻みスナップ処理
+        if (state.snap) {
+          const step = (15 * Math.PI) / 180;
+          angle = Math.round(angle / step) * step;
+        }
+
+        const radius = hypot(pos.x - v.x, pos.y - v.y);
+        targetPoint.x = v.x + radius * Math.cos(angle);
+        targetPoint.y = v.y + radius * Math.sin(angle);
+      }
+    }
+
+    function handlePointerUp() {
+      state.dragTarget = null;
+    }
+
+    function hypot(dx, dy) {
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    // --- メイン描画ループ ---
+    function renderLoop() {
+      const dpr = window.devicePixelRatio || 1;
+
+      // キャンバスをクリア & 高DPI座標系を設定
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      if (state.mode !== 'gyro') {
+        // 分度器ガイド描画
+        if (state.protractor.enabled) {
+          drawProtractorGraphic();
+        }
+
+        // 測定線・角度弧・頂点描画
+        drawMeasurementLines();
+      }
+
+      requestAnimationFrame(renderLoop);
+    }
+
+    // --- 分度器グラフィック描画（高コントラスト視認性向上版） ---
+    function drawProtractorGraphic() {
+      const { v } = state.points;
+      const { radius, opacity, type, rotation } = state.protractor;
+
+      ctx.save();
+      ctx.translate(v.x, v.y);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.globalAlpha = opacity;
+
+      // 1. 半円 / 全円の分度器本体（半透明ガラスデザイン）
+      ctx.beginPath();
+      if (type === '180') {
+        ctx.arc(0, 0, radius, Math.PI, 0, false);
+        ctx.closePath();
+      } else {
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      }
+      
+      // 背景・境界のスタイル設定
+      const grad = ctx.createRadialGradient(0, 0, 10, 0, 0, radius);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.35)');
+      grad.addColorStop(0.7, 'rgba(240, 249, 255, 0.25)');
+      grad.addColorStop(1, 'rgba(186, 230, 253, 0.35)');
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // 外枠の鮮やかなライン（シアン/ブルー）
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#38bdf8';
+      ctx.stroke();
+
+      // 水平基準線
+      ctx.beginPath();
+      ctx.moveTo(-radius, 0);
+      ctx.lineTo(radius, 0);
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 内円枠
+      ctx.beginPath();
+      ctx.arc(0, 0, radius * 0.35, 0, type === '180' ? Math.PI : Math.PI * 2, type === '180');
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // 2. 目盛りと数値（外側：白/シアン、内側：イエロー）
+      const maxDeg = type === '180' ? 180 : 360;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      for (let deg = 0; deg <= maxDeg; deg += 1) {
+        // 度数からラジアン計算（180度タイプは左180°〜右0°）
+        const rad = type === '180' ? Math.PI - (deg * Math.PI) / 180 : (deg * Math.PI) / 180;
+        const isMajor = deg % 10 === 0;
+        const isMedium = deg % 5 === 0;
+
+        const tickLength = isMajor ? 16 : isMedium ? 10 : 6;
+        const r1 = radius;
+        const r2 = radius - tickLength;
+
+        const x1 = r1 * Math.cos(rad);
+        const y1 = r1 * Math.sin(rad);
+        const x2 = r2 * Math.cos(rad);
+        const y2 = r2 * Math.sin(rad);
+
+        // 目盛り線
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = isMajor ? '#ffffff' : isMedium ? '#7dd3fc' : 'rgba(255, 255, 255, 0.6)';
+        ctx.lineWidth = isMajor ? 2 : 1;
+        ctx.stroke();
+
+        // 10度刻みの数字表示
+        if (isMajor && deg <= maxDeg) {
+          // 外側目盛り数字（0 -> 180）
+          const textR1 = radius - 26;
+          const tx1 = textR1 * Math.cos(rad);
+          const ty1 = textR1 * Math.sin(rad);
+
+          ctx.font = 'bold 11px Inter, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+          ctx.shadowBlur = 3;
+          ctx.fillText(`${deg}°`, tx1, ty1);
+
+          // 180度分度器の場合、内側に逆向き（180 -> 0）数字を表示
+          if (type === '180' && deg > 0 && deg < 180) {
+            const innerDeg = 180 - deg;
+            const textR2 = radius - 42;
+            const tx2 = textR2 * Math.cos(rad);
+            const ty2 = textR2 * Math.sin(rad);
+
+            ctx.font = 'bold 9px Inter, sans-serif';
+            ctx.fillStyle = '#fde047'; // イエローで区別
+            ctx.fillText(`${innerDeg}°`, tx2, ty2);
+          }
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      ctx.restore();
+    }
+
+    // --- 測定線・角度計算の描画 ---
+    function drawMeasurementLines() {
+      const { v, a, b } = state.points;
+
+      // ベクトル角
+      const angleA = Math.atan2(a.y - v.y, a.x - v.x);
+      const angleB = Math.atan2(b.y - v.y, b.x - v.x);
+
+      // ナビゲーション角度計算 (0 ~ 2π)
+      let diff = angleB - angleA;
+      while (diff < 0) diff += Math.PI * 2;
+
+      // 角度単位変換
+      const degValue = diff * (180 / Math.PI);
+      const suppValue = 180 - degValue;
+      const exValue = 360 - degValue;
+
+      // テキスト表示更新
+      if (state.unit === 'deg') {
+        document.getElementById('main-angle-text').innerText = `${degValue.toFixed(1)}°`;
+        document.getElementById('supp-angle-text').innerText = `${Math.abs(suppValue).toFixed(1)}°`;
+        document.getElementById('ex-angle-text').innerText = `${exValue.toFixed(1)}°`;
+      } else {
+        document.getElementById('main-angle-text').innerText = `${diff.toFixed(3)} rad`;
+        document.getElementById('supp-angle-text').innerText = `${(Math.PI - diff).toFixed(3)} rad`;
+        document.getElementById('ex-angle-text').innerText = `${(Math.PI * 2 - diff).toFixed(3)} rad`;
+      }
+
+      // 1. 扇形/角度弧の塗りつぶし
+      ctx.beginPath();
+      ctx.moveTo(v.x, v.y);
+      ctx.arc(v.x, v.y, 50, angleA, angleB, false);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.25)';
+      ctx.fill();
+      ctx.strokeStyle = '#818cf8';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 2. 測定アーム線（V-A, V-B）
+      ctx.beginPath();
+      ctx.moveTo(v.x, v.y);
+      ctx.lineTo(a.x, a.y);
+      ctx.moveTo(v.x, v.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([6, 4]); // 破線効果
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 3. ポイント描画 (V, A, B)
+      drawControlPoint(v.x, v.y, '#6366f1', 'V (頂点)');
+      drawControlPoint(a.x, a.y, '#10b981', 'A');
+      drawControlPoint(b.x, b.y, '#f59e0b', 'B');
+    }
+
+    // コントロールポイント描画ヘルパー
+    function drawControlPoint(x, y, color, label) {
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      // ラベル
+      ctx.font = 'bold 12px Inter, sans-serif';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = 'rgba(0,0,0,0.8)';
+      ctx.shadowBlur = 4;
+      ctx.fillText(label, x + 14, y + 4);
+      ctx.shadowBlur = 0;
+    }
+
+    // --- スクリーンショット生成 ---
+    function takeScreenshot() {
+      // 一時的な合成用Canvasを作成
+      const rect = container.getBoundingClientRect();
+      const offscreen = document.createElement('canvas');
+      offscreen.width = rect.width;
+      offscreen.height = rect.height;
+      const offCtx = offscreen.getContext('2d');
+
+      // 背景色
+      offCtx.fillStyle = '#0f172a';
+      offCtx.fillRect(0, 0, rect.width, rect.height);
+
+      // カメラまたはアップロード画像の合成
+      if (state.mode === 'camera' && !video.classList.contains('hidden')) {
+        offCtx.drawImage(video, 0, 0, rect.width, rect.height);
+      } else if (state.mode === 'image' && !uploadedImage.classList.contains('hidden')) {
+        const imgRatio = uploadedImage.naturalWidth / uploadedImage.naturalHeight;
+        const canvasRatio = rect.width / rect.height;
+        let dw = rect.width;
+        let dh = rect.height;
+        let dx = 0;
+        let dy = 0;
+
+        if (imgRatio > canvasRatio) {
+          dh = rect.width / imgRatio;
+          dy = (rect.height - dh) / 2;
+        } else {
+          dw = rect.height * imgRatio;
+          dx = (rect.width - dw) / 2;
+        }
+        offCtx.drawImage(uploadedImage, dx, dy, dw, dh);
+      }
+
+      // メインCanvas要素を描画
+      offCtx.drawImage(canvas, 0, 0, rect.width, rect.height);
+
+      // ダウンロードリンク生成
+      const link = document.createElement('a');
+      link.download = `protractor-measurement-${Date.now()}.png`;
+      link.href = offscreen.toDataURL('image/png');
+      link.click();
+    }
+  </script>
+</body>
+</html>
